@@ -3,6 +3,8 @@
  */
 package play.api.data
 
+import akka.actor.ActorSystem
+import akka.stream.ActorMaterializer
 import play.api.{ Configuration, Environment }
 import play.api.data.Forms._
 import play.api.data.validation.Constraints._
@@ -11,9 +13,13 @@ import play.api.i18n._
 import play.api.libs.json.Json
 import org.specs2.mutable.Specification
 import play.api.http.HttpConfiguration
+import play.api.i18n._
 import play.api.libs.Files.TemporaryFile
-import play.api.mvc.MultipartFormData
+import play.api.mvc.{ MultipartFormData, Results }
 import play.core.test.FakeRequest
+
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 class FormSpec extends Specification {
   "A form" should {
@@ -263,6 +269,23 @@ class FormSpec extends Specification {
         )
       )
       failingValidatorForm.fill("foo").errors must beEmpty
+    }
+
+    "form error mapping error messages" in {
+      case class Item(number: Int)
+      val itemForm = Form(mapping("number" -> number(min = 0))(Item.apply)(Item.unapply))
+      val messagesApi = new DefaultMessagesApi(Map("default" -> Map("error.min" -> "minimum {0}!")))
+      implicit val request = FakeRequest("POST", "/").withFormUrlEncodedBody("number" -> "-3")
+      implicit val messages = messagesApi.preferred(request)
+      val result = itemForm.bindFromRequest().fold(
+        f => Results.BadRequest(Json.toJson(f.errors.map(e => e.key -> e.format).toMap)),
+        _ => ???
+      )
+      implicit val system = ActorSystem()
+      implicit val mat = ActorMaterializer()
+
+      val actual = Json.parse(Await.result(result.body.consumeData, 10.seconds).decodeString("utf-8"))
+      actual must equalTo(Json.obj("number" -> "minimum 0!"))
     }
   }
 
